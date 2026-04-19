@@ -1,32 +1,39 @@
 import streamlit as st
 import numpy as np
 import cv2
-from tensorflow.keras.models import load_model
 from PIL import Image
+import datetime
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-import datetime
 import matplotlib.pyplot as plt
+import tensorflow as tf
 
 # ---------------------------
-# LOAD MODEL
+# LOAD MODEL (SAFE)
 # ---------------------------
-model = load_model("tumor_model.keras", compile=False)
+@st.cache_resource
+def load_my_model():
+    return tf.keras.models.load_model("tumor_model.keras", compile=False)
 
+model = load_my_model()
+
+# ---------------------------
+# UI SETUP
+# ---------------------------
 st.set_page_config(page_title="MRI Tumor AI System", layout="centered")
 
 st.title("🧠 MRI Brain Tumor Detection System")
 st.write("Upload MRI scan for AI analysis")
 
 # ---------------------------
-# PDF REPORT FUNCTION
+# PDF REPORT
 # ---------------------------
 def generate_pdf(result, confidence, tumor_area, tumor_pixels):
     file_name = "MRI_Report.pdf"
     c = canvas.Canvas(file_name, pagesize=letter)
 
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(160, 750, "MRI Brain Tumor Report")
+    c.drawString(150, 750, "MRI Brain Tumor Analysis Report")
 
     c.setFont("Helvetica", 12)
     c.drawString(50, 700, f"Result: {result}")
@@ -43,7 +50,7 @@ def generate_pdf(result, confidence, tumor_area, tumor_pixels):
 # ---------------------------
 uploaded_file = st.file_uploader("Upload MRI Image", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
+if uploaded_file:
 
     # Read image
     image = Image.open(uploaded_file).convert("L")
@@ -55,12 +62,12 @@ if uploaded_file is not None:
     # ---------------------------
     # PREPROCESS
     # ---------------------------
-    img_resized = cv2.resize(image, (128, 128))
-    img_norm = img_resized / 255.0
-    img_input = np.expand_dims(img_norm, axis=(0, -1))
+    img = cv2.resize(image, (128, 128))
+    img = img / 255.0
+    img_input = np.expand_dims(img, axis=(0, -1))
 
     # ---------------------------
-    # MODEL PREDICTION
+    # PREDICTION
     # ---------------------------
     pred = model.predict(img_input)[0]
     pred = cv2.GaussianBlur(pred, (3, 3), 0)
@@ -90,18 +97,18 @@ if uploaded_file is not None:
     st.write(f"Confidence Score: {confidence:.4f}")
 
     # ---------------------------
-    # SEGMENTATION MASK
+    # MASK
     # ---------------------------
     mask = (pred > 0.3).astype(np.uint8)
-    mask_display = cv2.resize(mask, (image.shape[1], image.shape[0]))
+    mask = cv2.resize(mask, (image.shape[1], image.shape[0]))
 
     st.subheader("Tumor Mask")
-    st.image(mask_display * 255, width=300)
+    st.image(mask * 255, width=300)
 
     # ---------------------------
-    # OVERLAY IMAGE
+    # OVERLAY
     # ---------------------------
-    overlay = cv2.addWeighted(image, 0.7, mask_display * 255, 0.3, 0)
+    overlay = cv2.addWeighted(image, 0.7, mask * 255, 0.3, 0)
 
     st.subheader("Overlay View")
     st.image(overlay, width=300)
@@ -114,24 +121,20 @@ if uploaded_file is not None:
     st.write(f"Tumor Area: {tumor_ratio * 100:.2f}%")
 
     # ---------------------------
-    # 📊 DASHBOARD GRAPH
+    # GRAPH
     # ---------------------------
-    st.subheader("Confidence Visualization")
+    st.subheader("Confidence Graph")
 
     fig, ax = plt.subplots()
-    ax.bar(["Tumor Confidence", "Threshold"], [confidence, 0.02])
+    ax.bar(["Confidence", "Threshold"], [confidence, 0.02])
     st.pyplot(fig)
 
     # ---------------------------
-    # 📄 PDF DOWNLOAD
+    # PDF DOWNLOAD
     # ---------------------------
     if st.button("📄 Generate Medical Report"):
         file = generate_pdf(result, confidence, tumor_ratio * 100, tumor_pixels)
         st.success("Report Generated!")
 
         with open(file, "rb") as f:
-            st.download_button(
-                "Download PDF Report",
-                f,
-                file_name="MRI_Report.pdf"
-            )
+            st.download_button("Download PDF Report", f, file_name="MRI_Report.pdf")
