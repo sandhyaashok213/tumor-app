@@ -3,37 +3,40 @@ import numpy as np
 import cv2
 from PIL import Image
 import datetime
+import tensorflow as tf
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 import matplotlib.pyplot as plt
-import tensorflow as tf
 
 # ---------------------------
-# LOAD MODEL (SAFE)
+# PAGE CONFIG
 # ---------------------------
-@st.cache_resource
-def load_my_model():
-    return tf.keras.models.load_model("tumor_model.keras", compile=False)
+st.set_page_config(
+    page_title="Brain Tumor AI System",
+    layout="centered"
+)
 
-model = load_my_model()
-
-# ---------------------------
-# UI SETUP
-# ---------------------------
-st.set_page_config(page_title="MRI Tumor AI System", layout="centered")
-
-st.title("🧠 MRI Brain Tumor Detection System")
+st.title("🧠 Brain Tumor Detection System")
 st.write("Upload MRI scan for AI analysis")
 
 # ---------------------------
-# PDF REPORT
+# LOAD MODEL (SAFE CACHE)
+# ---------------------------
+@st.cache_resource
+def load_model_safe():
+    return tf.keras.models.load_model("tumor_model.keras", compile=False)
+
+model = load_model_safe()
+
+# ---------------------------
+# PDF REPORT GENERATOR
 # ---------------------------
 def generate_pdf(result, confidence, tumor_area, tumor_pixels):
     file_name = "MRI_Report.pdf"
     c = canvas.Canvas(file_name, pagesize=letter)
 
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(150, 750, "MRI Brain Tumor Analysis Report")
+    c.drawString(140, 750, "Brain Tumor Analysis Report")
 
     c.setFont("Helvetica", 12)
     c.drawString(50, 700, f"Result: {result}")
@@ -52,7 +55,6 @@ uploaded_file = st.file_uploader("Upload MRI Image", type=["jpg", "jpeg", "png"]
 
 if uploaded_file:
 
-    # Read image
     image = Image.open(uploaded_file).convert("L")
     image = np.array(image)
 
@@ -62,32 +64,44 @@ if uploaded_file:
     # ---------------------------
     # PREPROCESS
     # ---------------------------
-    img = cv2.resize(image, (128, 128))
-    img = img / 255.0
+    img = cv2.resize(image, (128, 128)) / 255.0
     img_input = np.expand_dims(img, axis=(0, -1))
 
     # ---------------------------
     # PREDICTION
     # ---------------------------
     pred = model.predict(img_input)[0]
+
+    # SAFE FIX (IMPORTANT)
+    if len(pred.shape) == 3:
+        pred = np.squeeze(pred)
+
     pred = cv2.GaussianBlur(pred, (3, 3), 0)
 
     # ---------------------------
-    # METRICS
+    # THRESHOLD MASK
     # ---------------------------
-    tumor_pixels = np.sum(pred > 0.3)
-    total_pixels = pred.size
-    tumor_ratio = tumor_pixels / total_pixels
+    threshold = 0.3
+    mask = (pred > threshold).astype(np.uint8)
+
+    # resize back
+    mask = cv2.resize(mask, (image.shape[1], image.shape[0]))
+
+    # ---------------------------
+    # METRICS (FIXED LOGIC)
+    # ---------------------------
+    tumor_pixels = np.sum(mask)
+    total_pixels = mask.size
+
+    tumor_area = (tumor_pixels / total_pixels) * 100
 
     max_prob = np.max(pred)
-    confidence = (tumor_ratio * 0.7) + (max_prob * 0.3)
+    confidence = float((tumor_area / 100) * 0.7 + max_prob * 0.3)
 
     # ---------------------------
-    # RESULT
+    # FINAL DECISION (IMPORTANT FIX)
     # ---------------------------
-    st.subheader("Diagnosis Result")
-
-    if confidence > 0.02:
+    if tumor_area > 1.0 or confidence > 0.25:
         result = "Tumor Detected"
         st.error("🧠 Tumor Detected")
     else:
@@ -97,11 +111,8 @@ if uploaded_file:
     st.write(f"Confidence Score: {confidence:.4f}")
 
     # ---------------------------
-    # MASK
+    # MASK DISPLAY
     # ---------------------------
-    mask = (pred > 0.3).astype(np.uint8)
-    mask = cv2.resize(mask, (image.shape[1], image.shape[0]))
-
     st.subheader("Tumor Mask")
     st.image(mask * 255, width=300)
 
@@ -118,23 +129,26 @@ if uploaded_file:
     # ---------------------------
     st.subheader("Tumor Statistics")
     st.write(f"Tumor Pixels: {tumor_pixels}")
-    st.write(f"Tumor Area: {tumor_ratio * 100:.2f}%")
+    st.write(f"Tumor Area: {tumor_area:.2f}%")
 
     # ---------------------------
     # GRAPH
     # ---------------------------
     st.subheader("Confidence Graph")
-
     fig, ax = plt.subplots()
-    ax.bar(["Confidence", "Threshold"], [confidence, 0.02])
+    ax.bar(["Confidence", "Threshold"], [confidence, 0.25])
     st.pyplot(fig)
 
     # ---------------------------
     # PDF DOWNLOAD
     # ---------------------------
     if st.button("📄 Generate Medical Report"):
-        file = generate_pdf(result, confidence, tumor_ratio * 100, tumor_pixels)
+        file = generate_pdf(result, confidence, tumor_area, tumor_pixels)
         st.success("Report Generated!")
 
         with open(file, "rb") as f:
-            st.download_button("Download PDF Report", f, file_name="MRI_Report.pdf")
+            st.download_button(
+                "Download PDF Report",
+                f,
+                file_name="MRI_Report.pdf"
+            )
